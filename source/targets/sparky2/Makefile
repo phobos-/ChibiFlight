@@ -115,8 +115,10 @@ CSRC = $(STARTUPSRC) \
        $(TESTSRC) \
        $(CHIBIOS)/os/hal/lib/streams/chprintf.c \
        source/drivers/mpu9250.c \
-       source/usbcfg.c \
        source/drivers/spektrum.c \
+       source/drivers/openlrs.c \
+       source/usbcfg.c \
+       source/receiver.c \
        source/flash.c \
        source/filter.c \
        source/main.c

@@ -23,8 +23,10 @@
 #include "config.h"
 #include "mcuconf.h"
 #include "chprintf.h"
+#include "receiver.h"
 #include "drivers/mpu9250.h"
 #include "drivers/spektrum.h"
+#include "drivers/openlrs.h"
 #include "flash.h"
 #include "filter.h"
 
@@ -53,7 +55,7 @@ struct LogEntry_t
 
 #endif
 
-static binary_semaphore_t MPUDataReady; /* Semaphore fro the MPU thread */
+static binary_semaphore_t MPUDataReady; /* Semaphore for the MPU thread */
 
 // Timer configuration for the OneShot signals to the ESC/Motors
 static PWMConfig pwmcfg= {
@@ -89,15 +91,16 @@ int32_t axisPID_D[3];
 
 // Prototype of the ISR. Needed for the ExtCfg.
 static void MPUISR(EXTDriver *extp, expchannel_t channel);
+extern void RFMISR(EXTDriver *extp, expchannel_t channel);
 // External interrupt configuration
 // Enable Gyro Interrupt input as edge interrupt
 static const EXTConfig ExternalInterruptConfig= {{
                                  {EXT_CH_MODE_DISABLED, NULL},
+								 {EXT_CH_MODE_DISABLED, NULL},
+                                 {EXT_CH_MODE_FALLING_EDGE|EXT_CH_MODE_AUTOSTART|EXT_MODE_GPIOD, RFMISR},//PD2 EXT_CH_MODE_BOTH_EDGES
                                  {EXT_CH_MODE_DISABLED, NULL},
                                  {EXT_CH_MODE_DISABLED, NULL},
-                                 {EXT_CH_MODE_DISABLED, NULL},
-                                 {EXT_CH_MODE_DISABLED, NULL},
-                                 {EXT_CH_MODE_RISING_EDGE|EXT_CH_MODE_AUTOSTART|EXT_MODE_GPIOC, MPUISR},
+                                 {EXT_CH_MODE_RISING_EDGE|EXT_CH_MODE_AUTOSTART|EXT_MODE_GPIOC, MPUISR},//PC5
                                  {EXT_CH_MODE_DISABLED, NULL},
                                  {EXT_CH_MODE_DISABLED, NULL},
                                  {EXT_CH_MODE_DISABLED, NULL},
@@ -141,13 +144,19 @@ static const motorMixer_t mixerQuadX[]= {
 SerialUSBDriver SDU1;
 extern const SerialUSBConfig serusbcfg;
 extern const USBConfig usbcfg;
-extern THD_WORKING_AREA(waReceiverThread, 1024);
+#if LOG
 extern THD_WORKING_AREA(LogThread_wa, 512);
+#endif
+#if OPENLRS
+extern THD_WORKING_AREA(waOpenLRSThread, 1024);
+#else
+extern THD_WORKING_AREA(waReceiverThread, 1024);
+#endif
+
 
 #if DEBUG_MODE
-extern uint8_t Frame[16];
-extern uint16_t ReceiverData[14];
-extern struct SensorGyroData RawGyroData;
+//extern uint8_t Frame[16];
+extern uint16_t ReceiverData[16];
 #endif
 extern struct SensorGyroData RawGyroData;
 extern volatile int16_t RCTarget[NUMBER_OF_CHANNELS+1];
@@ -268,22 +277,22 @@ static void Thread3(void *arg)
           {
             chprintf(
                 (BaseSequentialStream*) &SDU1,
-                "Ch1:  %04X Ch2:  %04X Ch3:  %04X Ch4:  %04X Ch5:  %04X Ch6:  %04X Ch7:  %04X \n",
+                "Ch1:  %04X Ch2:  %04X Ch3:  %04X Ch4:  %04X Ch5:  %04X Ch6:  %04X Ch7:  %04X \r\n",
                 ReceiverData[0], ReceiverData[1], ReceiverData[2],
                 ReceiverData[3], ReceiverData[4], ReceiverData[5],
                 ReceiverData[6]);
             chprintf(
                 (BaseSequentialStream*) &SDU1,
-                "Ch8:  %04X Ch9:  %04X Ch10: %04X Ch11: %04X Ch12: %04X Ch13: %04X Ch14: %04X \n",
+                "Ch8:  %04X Ch9:  %04X Ch10: %04X Ch11: %04X Ch12: %04X Ch13: %04X Ch14: %04X \r\n",
                 ReceiverData[7], ReceiverData[8],
                 ReceiverData[9], ReceiverData[10], ReceiverData[11],
                 ReceiverData[12], ReceiverData[13]);
             chprintf(
                 (BaseSequentialStream*) &SDU1,
-                "TARGET Throttle: %i Roll: %i Pitch: %i Yaw: %i Aux1: %i Aux2: %i\n",
+                "TARGET Throttle: %i Roll: %i Pitch: %i Yaw: %i Aux1: %i Aux2: %i\r\n",
                 RCTarget[0]/CLK_PER_MICRO, RCTarget[1], RCTarget[2],
                 RCTarget[3], RCTarget[4], RCTarget[5]);
-            chprintf((BaseSequentialStream*) &SDU1, "GYRO Roll: %d Pitch: %d Yaw: %d\n",
+            chprintf((BaseSequentialStream*) &SDU1, "GYRO Roll: %d Pitch: %d Yaw: %d\r\n",
                      GyroData[ROLL], GyroData[PITCH], GyroData[YAW]);
             outputmotors((BaseSequentialStream*) &SDU1);
 #if CH_DBG_THREADS_PROFILING
@@ -687,15 +696,17 @@ int main(void)
   palSetPadMode(GPIOC, 4, PAL_MODE_OUTPUT_PUSHPULL | PAL_STM32_OSPEED_HIGHEST);       /* New CS.      */
   palSetPad(GPIOC, 4);
 
-#if LOG
+#if LOG || OPENLRS
   /*
-   * SPI2 I/O pins setup.
+   * SPI3 I/O pins setup.
    */
   palSetPadMode(GPIOC, 10, PAL_MODE_ALTERNATE(6) |PAL_STM32_OSPEED_HIGHEST);       /* New SCK.     */
   palSetPadMode(GPIOC, 11, PAL_MODE_ALTERNATE(6) |PAL_STM32_OSPEED_HIGHEST);       /* New MISO.    */
   palSetPadMode(GPIOC, 12, PAL_MODE_ALTERNATE(6) | PAL_STM32_OSPEED_HIGHEST);       /* New MOSI.    */
-  palSetPadMode(GPIOB, 3, PAL_MODE_OUTPUT_PUSHPULL | PAL_STM32_OSPEED_HIGHEST);       /* New CS.      */
+  palSetPadMode(GPIOB, 3, PAL_MODE_OUTPUT_PUSHPULL | PAL_STM32_OSPEED_HIGHEST);       /* Flash CS.      */
+  palSetPadMode(GPIOA, 15, PAL_MODE_OUTPUT_PUSHPULL | PAL_STM32_OSPEED_HIGHEST);       /* RFM22b CS.      */
   palSetPad(GPIOB, 3);
+  palSetPad(GPIOA, 15);
 #endif
   /*
    *  LEDs settings
@@ -717,6 +728,8 @@ int main(void)
    * UART Receiver pin
    */
   palSetPadMode(GPIOC, 7, PAL_MODE_ALTERNATE(8)); /* UART 6 RX. */
+
+  palSetPadMode(GPIOD, 2, PAL_MODE_INPUT_PULLUP); //PAL_MODE_INPUT / _PULLUP / _PULLDOWN
 
   /*
    * Activates the USB driver and then the USB bus pull-up on D+.
@@ -746,8 +759,13 @@ int main(void)
   chThdCreateStatic(MPUThread_wa, sizeof(MPUThread_wa),
                     NORMALPRIO +5,MPUThread, NULL);
   // Start receiver thread: Highest prio
+#if OPENLRS
+  chThdCreateStatic(waOpenLRSThread, sizeof(waOpenLRSThread),
+                    NORMALPRIO +10, OpenLRSThread, NULL);
+#else
   chThdCreateStatic(waReceiverThread, sizeof(waReceiverThread),
                     NORMALPRIO +10, ReceiverThread, NULL);
+#endif
 #if DEBUG_MODE
   chThdCreateStatic(waThread3, sizeof(waThread3), NORMALPRIO, Thread3,
       NULL);

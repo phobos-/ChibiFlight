@@ -31,7 +31,7 @@ extern SerialUSBDriver SDU1;
 extern uint16_t LogData[];
 
 /*
- * Maximum speed SPI configuration (18MHz, CPHA=0, CPOL=0, MSb first).
+ * Maximum speed SPI configuration (21MHz, CPHA=0, CPOL=0, MSb first).
  */
 static const SPIConfig HSSpiConfig =
   {
@@ -53,10 +53,12 @@ static const SPIConfig HSSpiConfig =
 
 static int SPIExchangeData(SPIDriver *SPIPtr, uint8_t *TxBuf, uint8_t *RxBuf, size_t Size)
   {
+	spiAcquireBus(SPIPtr); /* Gain access to the bus */
     spiStart(SPIPtr, &HSSpiConfig); /* Setup transfer parameters.       */
     spiSelect(SPIPtr); /* Slave Select assertion.          */
     spiExchange(SPIPtr, Size, TxBuf, RxBuf); /* Atomic transfer operations.      */
     spiUnselect(SPIPtr); /* Slave Select de-assertion.       */
+    spiReleaseBus(SPIPtr); /* Hand over access to the bus */
     return 0;
   }
 
@@ -67,11 +69,12 @@ static int SPIExchangeData(SPIDriver *SPIPtr, uint8_t *TxBuf, uint8_t *RxBuf, si
 
 static int SPISendData(SPIDriver *SPIPtr, uint8_t *TxBuf, size_t Size)
   {
+	spiAcquireBus(SPIPtr); /* Gain access to the bus */
     spiStart(SPIPtr, &HSSpiConfig); /* Setup transfer parameters.       */
     spiSelect(SPIPtr); /* Slave Select assertion.          */
     spiSend(SPIPtr, Size, TxBuf); /* Send command                     */
     spiUnselect(SPIPtr); /* Slave Select de-assertion.       */
-    spiStop(SPIPtr);
+    spiReleaseBus(SPIPtr); /* Hand over access to the bus */
     return 0;
   }
 

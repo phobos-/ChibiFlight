@@ -40,14 +40,14 @@ int32_t GyroBias[3];
 int16_t GyroData[3] = {0,0,0};
 
 /*
- * Maximum speed SPI configuration (10.5MHz, CPHA=0, CPOL=0, MSb first).
+ * Maximum speed SPI configuration (42MHz, CPHA=0, CPOL=0, MSb first).
  */
 static const SPIConfig HSSpiConfig =
   {
   NULL,
   GPIOC,
   4,
-  SPI_CR1_BR_1
+  0//SPI_CR1_BR_1
   };
 
 /*
@@ -73,7 +73,7 @@ static const SPIConfig LSSpiConfig =
 static int ReadGyroData(void)
   {
     GyroReadCommandBuffer[0] = MPU9250_GYRO_XOUT_H | 0x80;
-    spiStart(&SPID1, &HSSpiConfig); /* Setup transfer parameters.       */
+    //spiStart(&SPID1, &HSSpiConfig); /* Setup transfer parameters.       */
     spiSelect(&SPID1); /* Slave Select assertion.          */
     spiExchange(&SPID1, GYRO_DATA_SIZE, GyroReadCommandBuffer, GyroReadDataBuffer); /* Atomic transfer operations.      */
     spiUnselect(&SPID1); /* Slave Select de-assertion.       */
@@ -181,7 +181,7 @@ static void MPU9250SetSampleRate(uint16_t SampleRateHz)
   }
 
 /* MPU9250Init:
- * Initialization of the MPU600 sensor
+ * Initialization of the MPU9250 sensor
  * Returns 0 if OK, -1 if error (sensor not found).
  */
 
@@ -214,6 +214,8 @@ int MPU9250Init(void)
     MPU9250WriteRegister(MPU9250_INT_PIN_CFG, 0x10);
     // Interrupt configuration
     MPU9250WriteRegister(MPU9250_INT_ENABLE, 0x01);
+    //Set to high speed after initialisation
+    spiStart(&SPID1, &HSSpiConfig);
     return 0;
   }
 

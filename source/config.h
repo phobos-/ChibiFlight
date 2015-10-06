@@ -11,12 +11,13 @@
 /* GENERAL SETTINGS */
 
 //Debug mode outputs some statistics over USB Serial
-#define DEBUG_MODE       FALSE
+#define DEBUG_MODE       TRUE
 // Calibrate OneShot ESC to 125-250 range
 #define CALIBRATE_ESC    FALSE
 // Log enables the code to save the flight log on the on board spi flash
 #define LOG              TRUE
 #define TIME_METER       FALSE
+#define OPENLRS			 TRUE
 
 #define BYTES_PER_ENTRY  sizeof(struct LogEntry_t) //(7+3+3*3+4)*2 = 46
 #define PAGE_SIZE        256
