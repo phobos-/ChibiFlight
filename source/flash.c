@@ -53,7 +53,7 @@ static const SPIConfig HSSpiConfig =
 
 static int SPIExchangeData(SPIDriver *SPIPtr, uint8_t *TxBuf, uint8_t *RxBuf, size_t Size)
   {
-	spiAcquireBus(SPIPtr); /* Gain access to the bus */
+    spiAcquireBus(SPIPtr); /* Gain access to the bus */
     spiStart(SPIPtr, &HSSpiConfig); /* Setup transfer parameters.       */
     spiSelect(SPIPtr); /* Slave Select assertion.          */
     spiExchange(SPIPtr, Size, TxBuf, RxBuf); /* Atomic transfer operations.      */
@@ -69,7 +69,7 @@ static int SPIExchangeData(SPIDriver *SPIPtr, uint8_t *TxBuf, uint8_t *RxBuf, si
 
 static int SPISendData(SPIDriver *SPIPtr, uint8_t *TxBuf, size_t Size)
   {
-	spiAcquireBus(SPIPtr); /* Gain access to the bus */
+    spiAcquireBus(SPIPtr); /* Gain access to the bus */
     spiStart(SPIPtr, &HSSpiConfig); /* Setup transfer parameters.       */
     spiSelect(SPIPtr); /* Slave Select assertion.          */
     spiSend(SPIPtr, Size, TxBuf); /* Send command                     */

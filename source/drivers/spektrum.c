@@ -15,7 +15,7 @@
 /***********************************/
 /* Global variables in this module */
 /***********************************/
-extern uint16_t	ReceiverData[16];
+extern uint16_t ReceiverData[16];
 
 static const SerialConfig MyConfig =
 {

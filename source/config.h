@@ -17,7 +17,7 @@
 // Log enables the code to save the flight log on the on board spi flash
 #define LOG              TRUE
 #define TIME_METER       FALSE
-#define OPENLRS			 TRUE
+#define OPENLRS          TRUE
 
 #define BYTES_PER_ENTRY  sizeof(struct LogEntry_t) //(7+3+3*3+4)*2 = 46
 #define PAGE_SIZE        256
@@ -41,13 +41,13 @@
 #define TURN_O_LED_OFF()        palSetPad(GPIOB, 4)
 #define TOGGLE_O_LED()          palTogglePad(GPIOB,4)
 
-#define TURN_LED_ON()             palClearPad(GPIOB, 5)
-#define TURN_LED_OFF()  	      palSetPad(GPIOB, 5)
-#define TOGGLE_LED()        	  palTogglePad(GPIOB,5)
+#define TURN_LED_ON()           palClearPad(GPIOB, 5)
+#define TURN_LED_OFF()          palSetPad(GPIOB, 5)
+#define TOGGLE_LED()            palTogglePad(GPIOB,5)
 
-#define TURN_B2_LED_ON()         palClearPad(GPIOB, 6)
-#define TURN_B2_LED_OFF()        palSetPad(GPIOB, 6)
-#define TOGGLE_B2_LED()          palTogglePad(GPIOB,6)
+#define TURN_B2_LED_ON()        palClearPad(GPIOB, 6)
+#define TURN_B2_LED_OFF()       palSetPad(GPIOB, 6)
+#define TOGGLE_B2_LED()         palTogglePad(GPIOB,6)
 
 /* GYRO */
 #define GYRO_LPF              GYRO_LPF_3600

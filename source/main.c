@@ -96,7 +96,7 @@ extern void RFMISR(EXTDriver *extp, expchannel_t channel);
 // Enable Gyro Interrupt input as edge interrupt
 static const EXTConfig ExternalInterruptConfig= {{
                                  {EXT_CH_MODE_DISABLED, NULL},
-								 {EXT_CH_MODE_DISABLED, NULL},
+                                 {EXT_CH_MODE_DISABLED, NULL},
                                  {EXT_CH_MODE_FALLING_EDGE|EXT_CH_MODE_AUTOSTART|EXT_MODE_GPIOD, RFMISR},//PD2 EXT_CH_MODE_BOTH_EDGES
                                  {EXT_CH_MODE_DISABLED, NULL},
                                  {EXT_CH_MODE_DISABLED, NULL},
@@ -158,7 +158,9 @@ extern THD_WORKING_AREA(waReceiverThread, 1024);
 //extern uint8_t Frame[16];
 extern uint16_t ReceiverData[16];
 #endif
+#if LOG
 extern struct SensorGyroData RawGyroData;
+#endif
 extern volatile int16_t RCTarget[NUMBER_OF_CHANNELS+1];
 extern volatile bool Armed;
 extern int16_t GyroData[];

@@ -28,19 +28,19 @@
 #define CHANNELS_16         0x06
 #define DIVERSITY_ENABLED   0x80
 
-#define RF_MAGIC 		0xABCDEF
+#define RF_MAGIC        0xABCDEF
 
-#define DATARATE 		4
-#define RF_POWER 		0
+#define DATARATE        4
+#define RF_POWER        0
 #define CHANNEL_SPACING 25
 
 #define MIN_RFM_FREQUENCY 413000000
 #define MAX_RFM_FREQUENCY 463000000
 #define CARRIER_FREQUENCY 435000000  // Hz  (ch 0)
 
-#define HOPCHANNELS 	6
-#define MAXHOPS			24
-#define HOPLIST 		18, 36, 54, 72, 90, 108
+#define HOPCHANNELS     6
+#define MAXHOPS         24
+#define HOPLIST         18, 36, 54, 72, 90, 108
 
 #define FLAGS       (CHANNELS_4_4 | TELEMETRY_OFF)
 
