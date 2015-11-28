@@ -46,6 +46,13 @@
 
 #define TELEMETRY_PACKETSIZE 9
 
+#define BEACON_FREQUENCY 435000000 // 0 to disable beacon
+#define BEACON_INTERVAL 10 // interval between first tones of beacon transmits (seconds)
+
+#define FAILSAFE_DELAY 500 //in ms
+
+#define RSSI_TYPE 0
+
 THD_FUNCTION(OpenLRSThread, arg);
 
 #endif /* OPENLRS_H_ */

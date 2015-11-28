@@ -21,9 +21,9 @@
 #define AUX2_CH               5
 #define STATUS_CH             6
 
-#define RC_MIN                0x00B //12
-#define RC_NEUTRAL            0x1F4 //500
-#define RC_MAX                0x3F4 //1012
+#define RC_MIN                0x00B //12< 11<=
+#define RC_NEUTRAL            0x200 //512
+#define RC_MAX                0x3F4 //1012> 1011>=
 
 
 #define ARM_FRAMES            30
@@ -37,7 +37,7 @@
 
 #define NUMBER_OF_CHANNELS	   8
 
-void FailSafeHandling(void *arg);
+void FailSafeHandling(void);
 void ReceiverFSM(uint16_t ReceiverData[]);
 void ReceiverInit(void);
 

@@ -50,9 +50,8 @@ static int16_t Map(int16_t In, int16_t InMin, int16_t InMax, int16_t OutMin,
  * In case of Failsafe just disarm.
  */
 
-void FailSafeHandling(void *arg)
+void FailSafeHandling(void)
   {
-    (void) arg;
     RCTarget[THROTTLE_CH] = THROTTLE_MIN;
     Armed = FALSE;
     TURN_LED_OFF();

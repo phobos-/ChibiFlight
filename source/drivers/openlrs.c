@@ -14,10 +14,13 @@
 
 static binary_semaphore_t RFMDataReady; /* Semaphore for the Receiver thread */
 extern uint16_t    ReceiverData[16];
+extern volatile bool Armed;
 
 uint8_t hopchannels[MAXHOPS] = { HOPLIST };
 const uint8_t pktsizes[] = { 0, 7, 11, 12, 16, 17, 21, 0 };
 #define PACKET_SIZE            pktsizes[FLAGS & 0x07]
+const uint32_t packet_advance_time_us = 1500;
+const uint32_t packet_timeout_us = 1000;
 
 // Private constants
 const struct rfm22_modem_regs {
@@ -120,6 +123,57 @@ static void rfm_write(uint8_t Address, uint8_t Value){
     spiSelect(&SPID3);
     spiSend(&SPID3, 2, TxBuffer);
     spiUnselect(&SPID3);
+}
+
+/*
+static uint32_t us_ticks;
+static uint32_t us_modulo;
+
+bool DELAY_Init(void)
+{
+    us_ticks = 168;
+
+    // Split this into two steps to avoid 64bit maths
+    us_modulo = 0xffffffff / us_ticks;
+    us_modulo += ((0xffffffff % us_ticks) + 1) / us_ticks;
+
+    if(us_modulo > 0x80000000) return false;
+
+    // turn on access to the DWT registers
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+
+    // enable the CPU cycle counter
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    return true;
+}
+
+static uint32_t micros(void)
+{
+    // turn on access to the DWT registers
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    return DWT->CYCCNT / us_ticks;
+}
+
+uint32_t getUsSince(uint32_t t)
+{
+    return (micros() + us_modulo - t) % us_modulo;
+}
+*/
+
+static uint32_t micros(void)
+{
+    return (uint32_t) ST2US(chVTGetSystemTimeX());
+}
+
+uint32_t getUsSince(uint32_t t)
+{
+    return (micros() - t);
+}
+
+static uint32_t millis(void)
+{
+    return (uint32_t) ST2MS(chVTGetSystemTimeX());
 }
 
 static void rfmSetCarrierFrequency(uint32_t f)
@@ -267,6 +321,136 @@ static void to_rx_mode(void)
     __asm__ __volatile__("nop");
 }
 
+static uint8_t rfmGetRSSI(void)
+{
+    return rfm_claim_read(RFM22_rssi);
+}
+
+static uint8_t beaconGetRSSI(void)
+{
+    uint16_t rssiSUM=0;
+
+    rfmSetCarrierFrequency(BEACON_FREQUENCY);
+    rfm_claim_write(RFM22_frequency_hopping_channel_select, 0); // ch 0 to avoid offset
+    chThdSleep(MS2ST(1));
+    rssiSUM+=rfmGetRSSI();
+    chThdSleep(MS2ST(1));
+    rssiSUM+=rfmGetRSSI();
+    chThdSleep(MS2ST(1));
+    rssiSUM+=rfmGetRSSI();
+    chThdSleep(MS2ST(1));
+    rssiSUM+=rfmGetRSSI();
+
+    return rssiSUM>>2;
+}
+
+static void beacon_tone(int16_t hz, int16_t len) //duration is now in half seconds.
+{
+    int16_t d = 500000 / hz; // better resolution
+
+    TURN_B2_LED_ON();
+
+    if (d < 1) {
+        d = 1;
+    }
+
+    rfm_claimBus();
+
+    // Set MOSI to digital out for bit banging
+    palSetPadMode(GPIOC, 12, PAL_MODE_OUTPUT_PUSHPULL);
+    palClearPad(GPIOC, 12);
+
+    uint32_t raw_time = chVTGetSystemTimeX();
+    int16_t cycles = (len * 500000 / d);
+    int16_t i;
+    for (i = 0; i < cycles; i++) {
+        palSetPad(GPIOC, 12);
+        chThdSleep(US2ST(d));
+        palClearPad(GPIOC, 12);
+        chThdSleep(US2ST(d));
+
+        // Make sure to give other tasks time to do things
+        if (ST2US(chVTGetSystemTimeX()-raw_time) > 10000) {
+            chThdSleep(MS2ST(1));
+            raw_time = chVTGetSystemTimeX();
+        }
+    }
+
+    palSetPadMode(GPIOC, 12, PAL_MODE_ALTERNATE(6)); /* New MOSI. */
+
+    rfm_releaseBus();
+
+    TURN_B2_LED_OFF();
+}
+
+static void beacon_send(bool static_tone)
+{
+    rfm_claimBus();
+    rfm_read(0x03);   // read status, clear interrupt
+    rfm_read(0x04);
+    rfm_write(0x06, 0x00);    // no wakeup up, lbd,
+    rfm_write(0x07, RFM22_opfc1_xton);      // disable lbd, wakeup timer, use internal 32768,xton = 1; in ready mode
+    rfm_write(0x09, 0x7f);  // (default) c = 12.5p
+    rfm_write(0x0a, 0x05);
+    rfm_write(0x0b, 0x12);    // gpio0 TX State
+    rfm_write(0x0c, 0x15);    // gpio1 RX State
+    rfm_write(0x0d, 0xfd);    // gpio 2 micro-controller clk output
+    rfm_write(0x0e, 0x00);    // gpio    0, 1,2 NO OTHER FUNCTION.
+
+    rfm_write(0x70, 0x2C);    // disable manchest
+
+    rfm_write(0x30, 0x00);    //disable packet handling
+
+    rfm_write(0x79, 0);  // start channel
+
+    rfm_write(0x7a, 0x05);   // 50khz step size (10khz x value) // no hopping
+
+    rfm_write(0x71, 0x12);   // trclk=[00] no clock, dtmod=[01] direct using SPI, fd8=0 eninv=0 modtyp=[10] FSK
+    rfm_write(0x72, 0x02);   // fd (frequency deviation) 2*625Hz == 1.25kHz
+
+    rfm_write(0x73, 0x00);
+    rfm_write(0x74, 0x00);    // no offset
+    rfm_releaseBus();
+
+    rfmSetCarrierFrequency(BEACON_FREQUENCY);
+
+    rfm_claim_write(0x6d, 0x07);   // 7 set max power 100mW
+
+    chThdSleep(MS2ST(10));
+    rfm_claim_write(0x07, (RFM22_opfc1_txon | RFM22_opfc1_xton));    // to tx mode
+    chThdSleep(MS2ST(10));
+
+    if (static_tone) {
+        uint8_t i=0;
+        while (i++<20) {
+            beacon_tone(440, 1);
+        }
+    } else {
+        //close encounters tune
+        //  G, A, F, F(lower octave), C
+        //octave 3:  392  440  349  175   261
+
+        beacon_tone(392, 1);
+
+        rfm_claim_write(0x6d, 0x05);   // 5 set mid power 25mW
+        chThdSleep(MS2ST(10));
+        beacon_tone(440,1);
+
+        rfm_claim_write(0x6d, 0x04);   // 4 set mid power 13mW
+        chThdSleep(MS2ST(10));
+        beacon_tone(349, 1);
+
+        rfm_claim_write(0x6d, 0x02);   // 2 set min power 3mW
+        chThdSleep(MS2ST(10));
+        beacon_tone(175,1);
+
+        rfm_claim_write(0x6d, 0x00);   // 0 set min power 1.3mW
+        chThdSleep(MS2ST(10));
+        beacon_tone(261, 2);
+    }
+    rfm_claim_write(0x07, RFM22_opfc1_xton);
+}
+
 static void unpackChannels(uint8_t config, uint16_t PPM[], uint8_t *p)
 {
     uint8_t i;
@@ -331,7 +515,239 @@ static uint32_t getInterval(void)
     }
 #endif
 
-    return US2ST(ret); //in systicks
+    return ret;
+}
+
+uint32_t lastPacketTimeUs=0;
+uint32_t numberOfLostPackets=0;
+uint32_t lastRSSITimeUs=0;
+uint8_t lastRSSI=0;
+bool willhop=false;
+bool link_acquired=false;
+bool received=false;
+bool beacon_armed=false;
+bool failsafe_active=false;
+uint32_t nextBeaconTimeMs=0;
+uint32_t linkLossTimeMs=0;
+uint32_t beacon_rssi_avg=0;
+uint16_t linkQuality=0;
+uint8_t RxBuffer[64];
+uint8_t rf_channel = 0;
+uint32_t interval=0;
+
+static void rx_loop(void)
+{
+    volatile uint32_t timeUs, timeMs;
+
+    if (rfm_claim_read(RFM22_gpio1_config) == 0) {     // detect the locked module and reboot
+        init_rfm();
+        to_rx_mode();
+    }
+
+    timeUs = micros();
+    timeMs = millis();
+
+    if(received){
+        //got link
+
+        TOGGLE_B2_LED();
+
+        spiAcquireBus(&SPID3);
+        spiStart(&SPID3, &HSSpiConfig);
+        spiSelect(&SPID3);
+        spiSend(&SPID3, 1, &(uint8_t){RFM22_fifo_access}); //creates temp variable and passes it's addr
+        spiExchange(&SPID3, PACKET_SIZE, OUT_FF, RxBuffer);
+        spiUnselect(&SPID3);
+        spiReleaseBus(&SPID3);
+
+        lastPacketTimeUs = timeUs;
+        numberOfLostPackets = 0;
+        linkQuality <<= 1;
+        linkQuality |= 1;
+
+        if ((RxBuffer[0] & 0x3e) == 0x00) { //we got proper data
+            unpackChannels(FLAGS & 7, ReceiverData, RxBuffer + 1);
+            //rescaleChannels(ReceiverData);
+
+            ReceiverFSM(ReceiverData);
+
+        }
+        /*else {
+            // Not PPM data. Push into serial RX buffer.
+            if ((RxBuffer[0] & 0x38) == 0x38) {
+                if ((RxBuffer[0] ^ tx_buf[0]) & 0x80) {
+                    // We got new data... (not retransmission)
+                    tx_buf[0] ^= 0x80; // signal that we got it
+                    bool rx_need_yield;
+                    uint8_t data_len = RxBuffer[0] & 7;
+                    if (openlrs_dev->rx_in_cb && (data_len > 0)) {
+                        (openlrs_dev->rx_in_cb) (openlrs_dev->rx_in_context, &RxBuffer[1], data_len, NULL, &rx_need_yield);
+                    }
+                }
+            }
+        }*/
+
+        // Flag to indicate ever got a link
+        link_acquired |= true;
+        failsafe_active = false;
+        beacon_armed = false; // when receiving packets make sure beacon cannot emit
+
+        // When telemetry is enabled we ack packets and send info about FC back
+        /*if (FLAGS & TELEMETRY_MASK) {
+            if ((TxBuffer[0] ^ RxBuffer[0]) & 0x40) {
+                // resend last message
+            } else {
+                TxBuffer[0] &= 0xc0;
+                TxBuffer[0] ^= 0x40; // swap sequence as we have new data
+
+                // Check for data on serial link
+                uint8_t bytes = 0;
+                // Append data from the com interface if applicable.
+                if (openlrs_dev->tx_out_cb) {
+                    // Try to get some data to send
+                    bool need_yield = false;
+                    bytes = (openlrs_dev->tx_out_cb) (openlrs_dev->tx_out_context, &TxBuffer[1], 8, NULL, &need_yield);
+                }
+
+                if (bytes > 0) {
+                    TxBuffer[0] |= (0x37 + bytes);
+                } else {
+                    // TxBuffer[0] lowest 6 bits left at 0
+                    TxBuffer[1] = lastRSSI;
+                    if (FlightBatteryStateHandle()) {
+                        FlightBatteryStateData bat;
+                        FlightBatteryStateGet(&bat);
+                        // FrSky protocol normally uses 3.3V at 255 but
+                        // divider from display can be set internally
+                        TxBuffer[2] = (uint8_t) bat.Voltage / 25.0f * 255;
+                        TxBuffer[3] = (uint8_t) bat.Current / 60.0f * 255;
+                    } else {
+                        TxBuffer[2] = 0; // these bytes carry analog info. package
+                        TxBuffer[3] = 0; // battery here
+                    }
+                    TxBuffer[4] = (openlrs_dev->lastAFCCvalue >> 8);
+                    TxBuffer[5] = openlrs_dev->lastAFCCvalue & 0xff;
+                    TxBuffer[6] = countSetBits(linkQuality & 0x7fff);
+                }
+            }
+
+            // This will block until sent
+            tx_packet(openlrs_dev, tx_buf, 9);
+        }*/
+
+        // Once a packet has been processed, flip back into receiving mode
+        //openlrs_dev->rf_mode = Receive;
+        rx_reset();
+
+        willhop = true;
+    }
+
+    if (link_acquired) {
+        // For missing packets to be properly trigger a well timed channel hop, this method should be called fairly close (but not sooner)
+        // than 1ms after the packet was expected to trigger this path
+        if ((numberOfLostPackets < HOPCHANNELS) && (getUsSince(lastPacketTimeUs) > (interval + packet_timeout_us))) {
+            // we lost packet, hop to next channel
+            linkQuality <<= 1;
+            willhop = true;
+            if (numberOfLostPackets == 0) {
+                linkLossTimeMs = timeMs;
+                nextBeaconTimeMs = 0;
+            }
+            numberOfLostPackets++;
+            lastPacketTimeUs += interval;
+            willhop = true;
+        } else if ((numberOfLostPackets >= HOPCHANNELS) && (getUsSince(lastPacketTimeUs) > (interval * HOPCHANNELS))) {
+            // hop slowly to allow resync with TX
+            linkQuality = 0;
+            willhop = true;
+            lastPacketTimeUs = timeUs;
+        }
+
+        if (numberOfLostPackets) {
+
+            TURN_B2_LED_OFF();
+
+            if (FAILSAFE_DELAY && !failsafe_active &&
+                ((timeMs - linkLossTimeMs) > FAILSAFE_DELAY))
+            {
+                failsafe_active = true;
+                FailSafeHandling();
+                nextBeaconTimeMs = (timeMs + 1000UL * BEACON_INTERVAL) | 1; //beacon activating...
+            }
+
+            if (BEACON_FREQUENCY && nextBeaconTimeMs &&
+                    ((timeMs - nextBeaconTimeMs) < 0x80000000)) {
+
+                // Indicate that the beacon is now active so we can trigger extra ones below
+                beacon_armed = true;
+
+                // Only beacon when disarmed
+                if (!Armed) {
+                    beacon_send(false); // play cool tune
+                    init_rfm();   // go back to normal RX
+                    rx_reset();
+                    nextBeaconTimeMs = (timeMs +  1000UL * BEACON_INTERVAL) | 1; // avoid 0 in time
+                }
+            }
+        }
+
+    } else {
+        // Waiting for first packet, hop slowly
+        if (getUsSince(lastPacketTimeUs) > (interval * HOPCHANNELS)) {
+            lastPacketTimeUs = timeUs;
+            willhop = true;
+        }
+    }
+
+    if (willhop) {
+        rf_channel++;
+        if ((rf_channel == MAXHOPS) || hopchannels[rf_channel] == 0) rf_channel = 0;
+
+        if (BEACON_FREQUENCY && nextBeaconTimeMs && beacon_armed) {
+            // Listen for RSSI on beacon channel briefly for 'trigger'
+            uint8_t brssi = beaconGetRSSI();
+            if (brssi > ((beacon_rssi_avg>>2) + 20)) {
+                nextBeaconTimeMs = timeMs + 1000L;
+            }
+            beacon_rssi_avg = (beacon_rssi_avg * 3 + brssi * 4) >> 2;
+
+            rfmSetCarrierFrequency(BEACON_FREQUENCY);
+        }
+
+        rfmSetChannel(rf_channel);
+        rx_reset();
+        willhop = false;
+    }
+}
+
+uint8_t OpenLRS_GetRSSI(void)
+{
+    if(failsafe_active)
+        return 0;
+    else {
+        uint16_t LQ = linkQuality & 0x7fff;
+        // count number of 1s in LinkQuality
+        LQ  = LQ - ((LQ >> 1) & 0x5555);
+        LQ  = (LQ & 0x3333) + ((LQ >> 2) & 0x3333);
+        LQ  = LQ + (LQ >> 4);
+        LQ &= 0x0F0F;
+        LQ = (LQ * 0x0101) >> 8;
+
+        switch(RSSI_TYPE) {
+        case 0: //OPENLRS_RSSI_TYPE_COMBINED
+            if ((uint8_t)LQ == 15) {
+                return (uint8_t)((lastRSSI >> 1)+128);
+            } else {
+                return LQ * 9;
+            }
+        case 1: //OPENLRS_RSSI_TYPE_RSSI
+            return lastRSSI;
+        case 2: //OPENLRS_RSSI_TYPE_LINKQUALITY
+            return (uint8_t)(LQ << 4);
+        default:
+            return 0;
+        }
+    }
 }
 
 bool OpenLRSInit(void){
@@ -362,85 +778,71 @@ THD_FUNCTION(OpenLRSThread, arg)
     //extStart(&EXTD1, &ExternalInterruptConfig); /* External interrupt setup */
     spiStart(&SPID3, &HSSpiConfig); /* Setup SPI3 */
 
-    uint8_t numberOfLostPackets = 0;
-    bool willhop;
-    systime_t lastPacketTime, currentTime;
-    virtual_timer_t failsafeTimer;
-
-    uint8_t RxBuffer[64];
-    uint8_t rf_channel = 0;
-    uint32_t interval = getInterval();
-
     ReceiverInit();
 
-    if (!OpenLRSInit())
+    if (!OpenLRSInit()/* || !DELAY_Init()*/)
           while (TRUE)
             {
               TOGGLE_O_LED();                  // RFM22b not answering
               chThdSleepMilliseconds(500);   // Toggle LED forever
             }
 
-    chVTObjectInit(&failsafeTimer);  // virtual timer used for failsafe handling
+    bool rssi_sampled = false;
+    interval = getInterval();
 
     while(TRUE){
+        /* This block of code determines the timing of when to call the loop method. It reaches a bit into
+         * the internal state of that method to get the optimal timings. This is to keep the loop method as
+         * similar as possible to the openLRSng implementation (for easier maintenance of compatibility)
+         * while minimizing overhead spinning in a while loop.
+         *
+         * There are three reasons to go into loop:
+         *  1. the ISR was triggered (packet was received)
+         *  2. a little before the expected packet (to sample the RSSI while receiving packet)
+         *  3. a little after expected packet (to channel hop when a packet was missing)
+         */
 
-        currentTime = chVTGetSystemTime();
-        willhop=false;
+        uint32_t delay_ms = 0;
 
-        if (rfm_claim_read(RFM22_gpio1_config) == 0) {     // detect the locked module and reboot
-            init_rfm();
-            to_rx_mode();
+        uint32_t time_since_packet_us = getUsSince(lastPacketTimeUs);
+
+        if (!rssi_sampled) {
+            // If we had not sampled RSSI yet, schedule a bit early to try and catch while "packet is in the air"
+            uint32_t time_till_measure_rssi_us  = (interval - packet_advance_time_us) - time_since_packet_us;
+            delay_ms = (time_till_measure_rssi_us + 999) / 1000;
+        } else {
+            // If we have sampled RSSI we want to schedule to hop when a packet has been missed
+            uint32_t time_till_timeout_us  = (interval + packet_timeout_us) - time_since_packet_us;
+            delay_ms = (time_till_timeout_us + 999) / 1000;
         }
 
-        if(chBSemWaitTimeout(&RFMDataReady,interval * HOPCHANNELS) == MSG_OK){
-            //got link
+        // Maximum delay based on packet time
+        const uint32_t max_delay = (interval + packet_timeout_us) / 1000;
+        if (delay_ms > max_delay) delay_ms = max_delay;
 
-            TOGGLE_B2_LED();
+        if (chBSemWaitTimeout(&RFMDataReady,MS2ST(delay_ms)) == MSG_TIMEOUT) {
+            received = false;
 
-            spiAcquireBus(&SPID3);
-            spiStart(&SPID3, &HSSpiConfig);
-            spiSelect(&SPID3);
-            spiSend(&SPID3, 1, &(uint8_t){RFM22_fifo_access}); //creates temp variable and passes it's addr
-            spiExchange(&SPID3, PACKET_SIZE, OUT_FF, RxBuffer);
-            spiUnselect(&SPID3);
-            spiReleaseBus(&SPID3);
+            if (!rssi_sampled) {
+                // We timed out to sample RSSI
+                if (numberOfLostPackets < 2) {
 
-            if ((RxBuffer[0] & 0x3e) == 0x00) { //we got proper data
-                unpackChannels(FLAGS & 7, ReceiverData, RxBuffer + 1);
-                //rescaleChannels(ReceiverData);
-
-                ReceiverFSM(ReceiverData);
-
-                numberOfLostPackets=0;
-                lastPacketTime = currentTime;
-
-                chVTSet(&failsafeTimer, MS2ST(500), FailSafeHandling, 0); // re-start failsafe timer (failsafe after 500ms)
-                willhop = true;
+                    lastRSSITimeUs = lastPacketTimeUs;
+                    lastRSSI = rfmGetRSSI(); // Read the RSSI value
+                }
+            } else {
+                // We timed out because packet was missed
+                rx_loop();
             }
 
-            if ((numberOfLostPackets < HOPCHANNELS) && ((currentTime - lastPacketTime) > (interval + US2ST(1000)))) {
-                        // we lost packet, hop to next channel
-                        TURN_B2_LED_OFF();
-                        numberOfLostPackets++;
-                        lastPacketTime += interval;
-                        willhop=true;
-                    } else if ((numberOfLostPackets >= HOPCHANNELS) && ((currentTime - lastPacketTime) > (interval * HOPCHANNELS))) {
-                        // hop slowly to allow resync with TX
-                        TURN_B2_LED_OFF();
-                        lastPacketTime = currentTime;
-                        willhop=true;
-                    }
+            rssi_sampled = true;
         } else {
-            // Waiting for first packet, hop slowly
-            lastPacketTime = currentTime;
-            willhop=true;
-        }
+            // Process incoming data
+            received = true;
+            rx_loop();
 
-        if (willhop){
-            rf_channel++;
-            if ((rf_channel == MAXHOPS) || hopchannels[rf_channel] == 0) rf_channel = 0;
-            rfmSetChannel(rf_channel);
-            rx_reset();
+            // When a packet has been received (processed below) indicate we need to sample a new RSSI
+            rssi_sampled = false;
         }
     }
 }
